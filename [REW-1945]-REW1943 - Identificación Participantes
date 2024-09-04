@@ -1,0 +1,54 @@
+--REPORTE: Identificación y análisis participantes
+--=======
+with last_store AS(
+				SELECT * FROM
+					(
+					select 	s.*,
+							row_number() over(partition by s.id order by s.lastmodifieddate DESC) as rn
+					from coe_engineering_ddl_landing_prd.salesforce_store s 
+					where s.sbx_name__c is not NULL
+					)
+				WHERE rn = 1
+				),
+last_transactionjournal AS 
+				(
+				SELECT * FROM 
+					(
+					SELECT 	DATE(date_add('hour', -5, t.activitydate)) as New_activityDate, t.*, 
+							row_number() over(partition by t.id order by t.sbx_ticketnumber__c DESC) as rn 
+					FROM coe_engineering_ddl_landing_prd.salesforce_transactionjournal t
+					WHERE t.journalsubtypeid = '0lS5f000000XghCEAS'
+					)
+				WHERE rn = 1
+				),
+last_loyaltyledger AS
+				(
+				SELECT * FROM
+					(
+					SELECT ll.*,
+							row_number() over(partition by ll.transactionjournalid order by ll.activitydate DESC) as rn 
+					FROM coe_engineering_ddl_landing_prd.salesforce_loyaltyledger ll
+					WHERE (ll.promotionid = '' OR ll.promotionid IS NULL)
+					)
+				WHERE rn = 1
+				),
+last_contact AS 
+				(
+				SELECT * FROM 
+					(
+						SELECT 	c.*,
+								row_number() over(partition by c.id order by c.lastmodifieddate DESC) as rn 
+						FROM coe_engineering_ddl_landing_prd.salesforce_contact c
+					)
+				WHERE rn = 1
+				)
+SELECT --*--c	t.New_activityDate, t.activitydate, 
+	c.id, c.firstname, c.lastname, c.email, c.sbx_dni__c, count(*) AS Nro_Trx, SUM(CAST(t.transactionamount AS DOUBLE)) AS Total_Bruto, SUM(CAST(ll.points AS DOUBLE)) AS Total_Puntos
+	FROM last_transactionjournal t	
+INNER join last_store s on t.sbx_store_code__c = s.id  
+INNER join last_contact c on t.sbx_contactid__c = c.id  
+LEFT join last_loyaltyledger ll on ll.transactionjournalid = t.id 
+WHERE 
+      date_add('hour', -5, t.activitydate) >= TIMESTAMP '2024-08-19 00:00:00'
+      AND date_add('hour', -5, t.activitydate) < TIMESTAMP '2024-09-02 00:00:00'
+GROUP BY c.id, c.firstname, c.lastname, c.email, c.sbx_dni__c
