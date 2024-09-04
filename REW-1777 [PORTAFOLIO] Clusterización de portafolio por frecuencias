@@ -1,0 +1,52 @@
+==============================================================================================================
+--CLUSTER PERFIL MIEMBRO + TKP
+with Tabla_Transaction_Ini as (
+	select CASE WHEN DATE(t.activitydate) >= DATE '2024-05-01' THEN 0.03 else 0.04
+		end as Recargo,* 
+	from coe_engineering_ddl_landing_prd.salesforce_transactionjournal t
+),
+Tabla_Transaction_Venta_Neta as (
+select 
+	round((1.0* cast(t.transactionamount as double))/(1+t.Recargo+0.18) + (1.0* cast(t.transactionamount as double))/(1+t.Recargo+0.18)*t.Recargo,2)  as Vta_Neta_Rec,	
+	t.* 
+from Tabla_Transaction_Ini t
+where t.journalsubtypeid = '0lS5f000000XghCEAS'
+),
+TB_Operaciones as (
+		select Anio_mes, memberid, COUNT(id) as NroTrx, SUM(Vta_Neta_Rec) total_Vta_Neta_Rec from 
+			(
+			select t.id, t.activitydate, date_format(t.activitydate, '%Y-%m') AS Anio_mes, t.channel, t.memberid, t.journaltypeid, jt.name "jt_name", t.journalsubtypeid, jst.name "jst_name", t.sbx_store_code__c, s.sbx_code__c, s.sbx_name__c, t.sbx_ticketnumber__c, t.sbx_daypart__c, t.paymentmethod, t.sbx_cardtype__c,
+					t.productid, p.family, p.name, t.quantity, t.status, t.sbx_drinksize__c, t.transactionamount,t.Vta_Neta_Rec, t.vouchercode, t.sbx_shoppinghours__c, t.sbx_daypartformula__c,
+					row_number() over(partition by t.id order by t.sbx_ticketnumber__c DESC) as rn
+				from Tabla_Transaction_Venta_Neta t
+			LEFT join coe_engineering_ddl_landing_prd.salesforce_journaltype jt on t.journaltypeid = jt.id 
+			LEFT join coe_engineering_ddl_landing_prd.salesforce_journalsubtype jst on t.journalsubtypeid = jst.id 
+			LEFT join coe_engineering_ddl_landing_prd.salesforce_store s on t.sbx_store_code__c = s.id 
+			LEFT join coe_engineering_ddl_landing_prd.salesforce_product p on t.productid = p.id 
+			where DATE(t.activitydate) between DATE '2023-11-01' and current_date 
+			)
+			where rn = 1 
+			group by Anio_mes, memberid
+)
+select  Anio_mes,
+		CASE 
+	        WHEN NroTrx >= 15 THEN 'Heavy'
+	        WHEN NroTrx BETWEEN 4 AND 14 THEN 'Medium'
+			WHEN NroTrx BETWEEN 1 AND 3 THEN 'Light'	   	
+		end as Perfil, 
+	   	CAST(1.0 * SUM(NroTrx) / COUNT(memberid) AS DECIMAL(10, 2)) AS Frecuencia,
+	   	CAST(SUM(total_Vta_Neta_Rec) as DECIMAL(20,2)) as Venta_Neta_Rec,
+	   	SUM(NroTrx) as TRX,
+	   	cast(SUM(total_Vta_Neta_Rec)/SUM(NroTrx) as DECIMAL(10, 2)) as TKP,
+	   	COUNT(memberid) as miembros, 
+	   	CAST(1.0 * COUNT(memberid) / SUM(COUNT(memberid)) OVER(partition by Anio_mes) * 100 AS DECIMAL(10, 2)) AS PorcentajeMiembros
+
+from TB_Operaciones
+group by
+		Anio_mes,
+		CASE 
+	        WHEN NroTrx >= 15 THEN 'Heavy'
+	        WHEN NroTrx BETWEEN 4 AND 14 THEN 'Medium'
+			WHEN NroTrx BETWEEN 1 AND 3 THEN 'Light'
+		END
+order by 1 DESC,6 asc
