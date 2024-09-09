@@ -1,0 +1,43 @@
+--==============================================================================================================================
+--==============================================================================================================================
+--Tiendas con bajo performance - Acciones Rewards
+WITH last_transactionjournal AS 
+				(
+				SELECT date_format(adjusted_activitydate, '%Y%m%d') AS formatted_date, 
+						CASE WHEN DATE(adjusted_activitydate) >= DATE '2024-05-01' THEN CAST(transactionamount AS double)/1.21*1.03 else CAST(transactionamount AS double)/1.22*1.04
+						end as VNeta_Rec,
+				* FROM 
+					(
+					SELECT date_add('hour', -5, t.activitydate) AS adjusted_activitydate, t.*, 
+							row_number() over(partition by t.id order by t.sbx_ticketnumber__c DESC) as rn 
+					FROM coe_engineering_ddl_landing_prd.salesforce_transactionjournal t
+					WHERE t.journalsubtypeid IN ('0lS5f000000XghCEAS', '0lS5f000000XghREAS', '0lS5f000000XghWEAS')-- SOLO TICKET,CUPON, STARS					
+					)
+				WHERE rn = 1
+				),
+last_store AS(
+				SELECT * FROM
+					(
+					select 	s.*,
+							row_number() over(partition by s.id order by s.lastmodifieddate DESC) as rn
+					from coe_engineering_ddl_landing_prd.salesforce_store s 
+					where s.sbx_name__c is not NULL
+					)
+				WHERE rn = 1
+				)
+SELECT t.formatted_date, t.id, t.memberid,jst.name ,t.sbx_shoppinghours__c, t.sbx_daypartformula__c,s.sbx_type__c, s.sbx_province__c,s.sbx_name__c, t.channel, t.paymentmethod, s.sbx_district__c,
+		CAST(t.transactionamount AS double) Total_Bruto, VNeta_Rec
+	FROM last_transactionjournal t
+INNER JOIN last_store s ON s.id =  t.sbx_store_code__c
+INNER JOIN coe_engineering_ddl_master_prd.dim_time ti ON ti.dwh_desc_date = t.formatted_date
+LEFT JOIN coe_engineering_ddl_landing_prd.salesforce_journalsubtype jst ON jst.id = t.journalsubtypeid
+WHERE DATE(adjusted_activitydate) >= DATE('2023-10-01')
+	AND DATE(adjusted_activitydate) < DATE('2024-09-01')
+--	GROUP BY t.formatted_date, s.sbx_name__c
+
+	
+SELECT tr.desc_date,tr.operation_date,desc_sales_channel,desc_sub_channel,desc_store,desc_zone_sale,desc_turn_attention,desc_hour_agg,
+		tr.net_sale_rc,tr.net_sale_rc_rewards, tr.net_sale_rc_rewards_pl , quantity_trx, quantity_trx_rewards, quantity_trx_rewards_pl 
+	FROM coe_engineering_ddl_analytics_prd.dm_trading_rewards tr
+WHERE tr.operation_date >= 20231101
+	AND tr.operation_date < 20240901
