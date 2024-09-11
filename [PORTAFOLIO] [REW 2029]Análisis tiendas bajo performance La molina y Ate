@@ -41,3 +41,51 @@ SELECT tr.desc_date,tr.operation_date,desc_sales_channel,desc_sub_channel,desc_s
 	FROM coe_engineering_ddl_analytics_prd.dm_trading_rewards tr
 WHERE tr.operation_date >= 20231101
 	AND tr.operation_date < 20240901
+
+
+
+--==============================================================================================================================
+--==============================================================================================================================
+--Buscar solo a los clientes de las tiendas observadas en el periodo y validar su comportamiento a nivel de consumo y distribucion 
+--por tiendas
+WITH last_transactionjournal AS 
+				(
+				SELECT date_format(adjusted_activitydate, '%Y%m%d') AS formatted_date, 
+						CASE WHEN DATE(adjusted_activitydate) >= DATE '2024-05-01' THEN CAST(transactionamount AS double)/1.21*1.03 else CAST(transactionamount AS double)/1.22*1.04
+						end as VNeta_Rec,
+				* FROM 
+					(
+					SELECT date_add('hour', -5, t.activitydate) AS adjusted_activitydate, t.*, 
+							row_number() over(partition by t.id order by t.sbx_ticketnumber__c DESC) as rn 
+					FROM coe_engineering_ddl_landing_prd.salesforce_transactionjournal t
+					WHERE t.journalsubtypeid IN ('0lS5f000000XghCEAS', '0lS5f000000XghREAS', '0lS5f000000XghWEAS')-- SOLO TICKET,CUPON, STARS					
+					)
+				WHERE rn = 1
+				),
+last_store AS(
+				SELECT * FROM
+					(
+					select 	s.*,
+							row_number() over(partition by s.id order by s.lastmodifieddate DESC) as rn
+					from coe_engineering_ddl_landing_prd.salesforce_store s 
+					where s.sbx_name__c is not NULL
+					)
+				WHERE rn = 1
+				),
+Lista_Clientes_Tiendas AS -- LISTA DE CLIENTES DEL LAS TIENDAS EVALUADAS
+				(
+				SELECT DISTINCT t.memberid FROM last_transactionjournal t
+				INNER JOIN last_store s ON s.id =  t.sbx_store_code__c
+				WHERE DATE(adjusted_activitydate) >= DATE('2023-10-01') AND DATE(adjusted_activitydate) < DATE('2024-09-01')
+						AND s.sbx_name__c IN ('SB 005 - LA MOLINA', 'SB 016 - MONITOR', 'SB 067 - FONTANA', 'SB 083 - MOLICENTRO','SB 112 - PURUCHUCO 1', 'SB 113 - PURUCHUCO 2', 'SB 124 - CAMACHO 2',
+												'SB126 - CENCOSUD LA MOLINA', 'SB 002 - JOCKEY', 'SB 109 - PLAZUELA JOCKEY PLAZA', 'SB 115 - RIPLEY JOCKEY PLAZA')
+				)			
+SELECT t.formatted_date, t.id, t.memberid,jst.name ,t.sbx_shoppinghours__c, t.sbx_daypartformula__c,s.sbx_type__c, s.sbx_province__c,s.sbx_name__c, t.channel, t.paymentmethod, s.sbx_district__c,
+		CAST(t.transactionamount AS double) Total_Bruto, VNeta_Rec
+	FROM last_transactionjournal t
+INNER JOIN last_store s ON s.id =  t.sbx_store_code__c
+INNER JOIN coe_engineering_ddl_master_prd.dim_time ti ON ti.dwh_desc_date = t.formatted_date
+LEFT JOIN coe_engineering_ddl_landing_prd.salesforce_journalsubtype jst ON jst.id = t.journalsubtypeid
+WHERE DATE(adjusted_activitydate) >= DATE('2023-10-01')
+	AND DATE(adjusted_activitydate) < DATE('2024-09-01')
+	AND t.memberid IN (SELECT * FROM Lista_Clientes_Tiendas)
