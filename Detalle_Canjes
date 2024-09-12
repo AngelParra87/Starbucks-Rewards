@@ -68,30 +68,3 @@ select v.id, v.lastmodifieddate, v.status, vd.Desc_Canje, vd.Desc_SubCanje, vd.t
 left join last_voucher_definition vd on (v.voucherdefinitionid = vd.id)
 )
 
-
-WITH last_transactionjournal AS 
-				(
-				SELECT * FROM 
-					(
-					SELECT 	DATE(date_add('hour', -5, t.activitydate)) as New_activityDate, date_add('hour', -5, t.activitydate) as adjusted_activitydate, t.*, 
-							row_number() over(partition by t.id order by t.sbx_ticketnumber__c DESC) as rn 
-					FROM coe_engineering_ddl_landing_prd.salesforce_transactionjournal t
-					WHERE t.journalsubtypeid IN ('0lS5f000000XghREAS', '0lS5f000000XghWEAS')
-					)
-				WHERE rn = 1
-				),
-last_loyaltyledger AS
-				(
-				SELECT * FROM
-					(
-					SELECT ll.*,
-							row_number() over(partition by ll.transactionjournalid order by ll.activitydate DESC) as rn 
-					FROM coe_engineering_ddl_landing_prd.salesforce_loyaltyledger ll
-					WHERE (ll.promotionid = '' OR ll.promotionid IS NULL)
-					)
-				WHERE rn = 1
-				)
-SELECT jst.name, ll.points, t.New_activityDate, t.adjusted_activitydate, t.id, memberid, t.channel, t. FROM last_transactionjournal t
-LEFT join last_loyaltyledger ll on ll.transactionjournalid = t.id 
-INNER JOIN coe_engineering_ddl_landing_prd.salesforce_journalsubtype jst ON jst.id = t.journalsubtypeid 
-WHERE t.New_activityDate > DATE'2024-04-30'
