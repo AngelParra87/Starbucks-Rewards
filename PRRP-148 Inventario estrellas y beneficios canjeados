@@ -1,0 +1,245 @@
+/*
+ * Explorar toda la información y crear la disponibilización de información.
+INFORMACION DEL 2024
+Numero de estrellas acumuladas al cierre de cada mes (OK)
+Número de canjes de estrellas por nivel de cada mes (OK)
+Número de canjes de beneficios (por tipo: refill, cumpleaños, bebida x WB y shot gratis) por mes (OK)
+Cantidad de estrellas que se vencen por mes (PENDIENTE) -- SOLO SE TIENE INFORMACION DE ESTRELLAS VENCIDAS DESDE ESTE MES Y DISTORCIONADAS POR SER DE LA PRIMERA MIGRACION DE DATOS A SALESFORCE
+Al cierre de septiembre, contabilizar el # de clientes por rango de estrellas:(LISTO)
+de 0 a 25 
+de 26 a 50
+de 51 a 99
+de 100 a 199
+200 a 299
+300 a más
+
+CASOS EJEMPLOS
+ANGEL 0lMUP000000yEL32AM
+FERNANDA 0lM5f000000VQ0NEAW 
+*/
+
+
+--Numero de estrellas acumuladas al cierre de cada mes (BUSCAR) -OK				
+WITH last_loyaltymembercurrency AS(
+	select *
+		from (
+			select DATE(date_add('hour', -5, lmc.lastmodifieddate)) as New_lastmodifieddate, lmc.*, 
+				row_number() over(partition by lmc.loyaltymemberid order by lmc.lastmodifieddate DESC) as rn 
+			from coe_engineering_ddl_landing_prd.salesforce_loyaltymembercurrency  lmc
+			where DATE(date_add('hour', -5, lmc.lastmodifieddate)) < DATE '2024-10-01' -- LIMITACION PARA TENER INFORMACION POR CIERRE DE MES
+			)as Reporte
+	where rn = 1
+	)
+select New_lastmodifieddate, SUM(totalpointsexpired)
+--	SUM(lmc.pointsbalance)
+	from last_loyaltymembercurrency lmc 
+GROUP BY	New_lastmodifieddate
+--Cantidad Total 1009422
+
+
+WITH last_loyaltyprogrammember AS(
+	SELECT * 
+		FROM (
+			SELECT l.id, l.contactid, l.membershipnumber, l.sbx_estado_texto_calc__c, l.enrollmentdate, l.lastactivitydate, l.lastmodifieddate,
+				ROW_NUMBER() OVER(PARTITION BY L.id ORDER BY l.lastmodifieddate DESC) AS rn
+			FROM coe_engineering_ddl_landing_prd.salesforce_loyaltyprogrammember l
+			)AS Reporte
+	WHERE rn = 1
+	),
+last_lmc AS(
+select New_lastmodifieddate, loyaltymemberid, totalpuntos from
+	(
+		select DATE(date_add('hour', -5, lmc.lastmodifieddate)) as New_lastmodifieddate, 
+			lmc.loyaltymemberid, CAST(lmc.pointsbalance as INTEGER) as totalpuntos,
+			row_number() over(partition by lmc.loyaltymemberid order by lmc.lastmodifieddate DESC) as rn 
+		from coe_engineering_ddl_landing_prd.salesforce_loyaltymembercurrency  lmc
+		where DATE(date_add('hour', -5, lmc.lastmodifieddate)) < DATE '2024-10-01' -- LIMITACION PARA TENER INFORMACION POR CIERRE DE MES
+		
+	)as Reporte
+where rn = 1
+)
+select l.id, lmc.totalpuntos from last_loyaltyprogrammember l
+left join last_lmc lmc on l.id = lmc.loyaltymemberid
+
+
+
+--============================================================================================================================
+--============================================================================================================================
+--Número de canjes de estrellas por nivel de cada mes (BUSCAR)
+--Número de canjes de beneficios (por tipo: refill, cumpleaños, bebida x WB y shot gratis) por mes (BUSCAR)
+--DETALLE DE CANJES STARS Y CUPONES
+
+WITH --QUERY MAESTRO DE PRODUCTOS C/ SU CATEGORIA
+last_product AS (
+    SELECT p.id, p.name, p.description, p.lastmodifieddate, p.sbx_redemptionvalue__c,
+        ROW_NUMBER() OVER (PARTITION BY p.id ORDER BY p.lastmodifieddate DESC) AS rn
+    FROM coe_engineering_ddl_landing_prd.salesforce_product p
+),
+last_product_category AS (
+    SELECT pc.id, pc.name, pc.lastmodifieddate, pc.description,
+        ROW_NUMBER() OVER (PARTITION BY pc.id ORDER BY pc.lastmodifieddate DESC) AS rn
+    FROM coe_engineering_ddl_landing_prd.salesforce_productcategory pc
+),
+last_product_category_product AS (
+    SELECT 
+        pcp.*,
+        ROW_NUMBER() OVER (PARTITION BY pcp.id ORDER BY pcp.lastmodifieddate DESC) AS rn
+    FROM coe_engineering_ddl_landing_prd.salesforce_productcategoryproduct pcp
+),
+consolidado_producto as (
+SELECT  p.id, p.name, p.description, p.sbx_redemptionvalue__c,
+    MAX(CASE WHEN pc.description = 'Jerarquía nivel 1' THEN pc.name ELSE NULL END) AS "Jerarquía nivel 1",
+    MAX(CASE WHEN pc.description = 'Jerarquía nivel 2' THEN pc.name ELSE NULL END) AS "Jerarquía nivel 2",
+    MAX(CASE WHEN pc.description = 'Jerarquía nivel 3' THEN pc.name ELSE NULL END) AS "Jerarquía nivel 3",
+    MAX(CASE WHEN pc.description = 'Jerarquía nivel 4' THEN pc.name ELSE NULL END) AS "Jerarquía nivel 4"
+FROM 
+    last_product p
+    LEFT JOIN last_product_category_product pcp ON pcp.productid = p.id AND pcp.rn = 1
+    LEFT JOIN last_product_category pc ON pc.id = pcp.productcategoryid AND pc.rn = 1
+WHERE p.rn = 1
+GROUP BY p.id, p.name, p.description, p.sbx_redemptionvalue__c
+),--QUERY MAESTRO DE VOUCHERS
+last_voucher as 
+(
+select id, lastmodifieddate, status, contactid, voucherdefinitionid, vouchercode
+	from (
+		select 	v.*,
+				row_number () OVER(partition by v.vouchercode order by v.lastmodifieddate desc) as rn
+		from coe_engineering_ddl_landing_prd.salesforce_voucher v
+		 )
+where rn = 1
+),
+last_voucher_definition as
+(
+select 	id, name as Desc_SubCanje, type, expirationperiodunit,
+	CASE
+        WHEN name = 'Shot de café' THEN 'Shot de café'
+        WHEN name = 'Bebida tamaño Alto por mes de cumpleaños' THEN 'Mes de Cumpleaños'
+        WHEN name = 'Producto gratis por promoción' THEN 'Producto Gratis por Promocion'
+        WHEN name LIKE '%Refill%' THEN 'Refill'
+        ELSE name
+    END AS Desc_Canje
+	from ( 
+		select 	vd.*,
+				row_number () OVER(partition by vd.id order by vd.lastmodifieddate desc) as rn
+		from coe_engineering_ddl_landing_prd.salesforce_voucherdefinition vd
+		 )
+where rn = 1
+),
+consolidado_voucher as
+(
+select v.id, v.vouchercode, v.lastmodifieddate, v.status, vd.Desc_Canje, vd.Desc_SubCanje, vd.type
+	from last_voucher v
+left join last_voucher_definition vd on (v.voucherdefinitionid = vd.id)
+),
+--Agregando para transacciones
+last_transactionjournal AS 
+				(
+				SELECT * FROM 
+					(
+					SELECT 	DATE(date_add('hour', -5, t.activitydate)) as New_activityDate, date_add('hour', -5, t.activitydate) as adjusted_activitydate, t.*, 
+							row_number() over(partition by t.id order by t.sbx_ticketnumber__c DESC) as rn 
+					FROM coe_engineering_ddl_landing_prd.salesforce_transactionjournal t
+					WHERE t.journalsubtypeid IN ('0lS5f000000XghREAS', '0lS5f000000XghWEAS')
+					)
+				WHERE rn = 1
+				),
+last_loyaltyledger AS
+				(
+				SELECT * FROM
+					(
+					SELECT ll.*,
+							row_number() over(partition by ll.transactionjournalid order by ll.activitydate DESC) as rn 
+					FROM coe_engineering_ddl_landing_prd.salesforce_loyaltyledger ll
+					WHERE (ll.promotionid = '' OR ll.promotionid IS NULL)
+					)
+				WHERE rn = 1
+				),
+Total_Canjes_Beneficios_Star as(
+SELECT t.id as transaction, jst.id as id_jst, jst.name as name_jst, ll.points, t.New_activityDate, t.adjusted_activitydate,  memberid, t.channel, v.status, v.Desc_Canje, p.name, p.sbx_redemptionvalue__c, p."Jerarquía nivel 1", p."Jerarquía nivel 2"
+FROM last_transactionjournal t
+LEFT join last_loyaltyledger ll on ll.transactionjournalid = t.id 
+left join consolidado_voucher v on v.vouchercode = t.vouchercode
+left join consolidado_producto p on p.id = t.productid
+INNER JOIN coe_engineering_ddl_landing_prd.salesforce_journalsubtype jst ON jst.id = t.journalsubtypeid 
+where t.New_activityDate > DATE'2023-12-31' -- DESDE EL 2024
+)
+/*
+--ESTRELLAS
+SELECT date_format(t.New_activityDate, '%Y-%m') Anio_Mes, t.id_jst, t.name_jst, t.points, t.sbx_redemptionvalue__c, COUNT(*) AS Cantidad_Total
+from Total_Canjes_Beneficios_Star t
+where t.id_jst = '0lS5f000000XghWEAS'
+group by date_format(t.New_activityDate, '%Y-%m'), t.id_jst, t.name_jst, t.points, t.sbx_redemptionvalue__c 
+*/
+
+--BENEFICIOS
+select date_format(t.New_activityDate, '%Y-%m') Anio_Mes, t.id_jst, t.name_jst, t.status, t.Desc_Canje, count(*) as Cantidad_Total
+from Total_Canjes_Beneficios_Star t
+where t.id_jst = '0lS5f000000XghREAS'
+	  and t.status = 'Redeemed'
+group by date_format(t.New_activityDate, '%Y-%m'), t.id_jst, t.name_jst, t.status, t.Desc_Canje
+
+
+
+--============================================================================================================================
+--============================================================================================================================
+/*
+Al cierre de septiembre, contabilizar el # de clientes por rango de estrellas:(LISTO)
+de 0 a 25 
+de 26 a 50
+de 51 a 99
+de 100 a 199
+200 a 299
+300 a más
+*/
+
+WITH last_contact AS (
+	SELECT * 
+		FROM (
+			SELECT c.id, c.email, c.name, c.lastname,c.sbx_dni__c, c.sbx_day_birthdate__c, c.sbx_month_birthdate__c, c.lastmodifieddate, c.createddate, 
+					ROW_NUMBER() OVER(PARTITION BY c.id ORDER BY c.lastmodifieddate DESC) AS rn
+			FROM coe_engineering_ddl_landing_prd.salesforce_contact c
+			)AS Reporte
+	WHERE rn = 1
+),
+last_loyaltyprogrammember AS(
+	SELECT * 
+		FROM (
+			SELECT l.id, l.contactid, l.membershipnumber, l.sbx_estado_texto_calc__c, l.enrollmentdate, l.lastactivitydate, l.lastmodifieddate,
+				ROW_NUMBER() OVER(PARTITION BY L.id ORDER BY l.lastmodifieddate DESC) AS rn
+			FROM coe_engineering_ddl_landing_prd.salesforce_loyaltyprogrammember l
+			)AS Reporte
+	WHERE rn = 1
+),
+last_member_points AS(
+	SELECT * 
+		FROM (
+			SELECT lmc.loyaltymemberid, lmc.lastmodifieddate, lmc.pointsbalance, 
+					ROW_NUMBER() OVER (PARTITION BY  lmc.loyaltymemberid ORDER BY lmc.lastmodifieddate DESC) AS rn	
+			FROM coe_engineering_ddl_landing_prd.salesforce_loyaltymembercurrency lmc
+			)AS Reporte
+	WHERE rn = 1
+)
+SELECT 
+    CASE 
+        WHEN lmc.pointsbalance BETWEEN 0 AND 25 THEN '0-25'
+        WHEN lmc.pointsbalance BETWEEN 26 AND 50 THEN '26-50'
+        WHEN lmc.pointsbalance BETWEEN 51 AND 99 THEN '51-99'
+        WHEN lmc.pointsbalance BETWEEN 100 AND 199 THEN '100-199'
+        WHEN lmc.pointsbalance BETWEEN 200 AND 299 THEN '200-299'
+        ELSE '300+'
+    END AS Rango_Puntos,
+    COUNT(*) AS Cantidad
+FROM last_loyaltyprogrammember l
+INNER JOIN last_contact c ON (l.contactid = c.id)
+LEFT JOIN last_member_points lmc ON (lmc.loyaltymemberid = l.id)
+WHERE DATE(l.enrollmentdate) < DATE '2024-10-01'
+GROUP BY 
+		CASE 
+	        WHEN lmc.pointsbalance BETWEEN 0 AND 25 THEN '0-25'
+	        WHEN lmc.pointsbalance BETWEEN 26 AND 50 THEN '26-50'
+	        WHEN lmc.pointsbalance BETWEEN 51 AND 99 THEN '51-99'
+	        WHEN lmc.pointsbalance BETWEEN 100 AND 199 THEN '100-199'
+	        WHEN lmc.pointsbalance BETWEEN 200 AND 299 THEN '200-299'
+	        ELSE '300+'
+    	END
